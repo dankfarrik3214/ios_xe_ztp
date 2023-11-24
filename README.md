@@ -19,7 +19,7 @@ This script can be used with the ZTP process of Cisco IOS-XE
 |-------------|----------------------------|
 | Catalyst 9300         | 17.03.06         
 | Catalyst 9200         | 17.03.06  
-| Catalyst 9200CX       | 17.03.06
+| Catalyst 9200CX       | 17.10.01
 | Catalyst 9800         | 17.09.04             
 
 Currently only supporting IPv4
