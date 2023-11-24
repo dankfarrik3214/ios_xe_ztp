@@ -44,7 +44,36 @@ When a Cisco IOS-XE boots with no configuration it will start the autoinstaller 
 In the DHCP offer it will check if there is a DHCP option that can instruct to fetch a file to run ZTP. 
 
 It will save the ZTP file, start the guest-shell and then execute ztp.py file via python.
+
 ## Setup
+
+### http server
+Change the following line in the ztp.py script towards your ztp server:
+```
+http_server = 'x.x.x.x'
+```
+
+Where x is the ip address of your server. This can be also it's hostname, aslong DNS is working with the DHCP offer.
+
+### Logging
+It's also possible to turn logging on or off. Per default it's on. To change this, change to boolean on this line on the ztp.py script.
+```
+log_tofile = True
+```
+
+### logging directory
+The log of the ZTP script is to be found in this path on the Cisco IOS-XE device (when the ZTP script has run)
+```
+flash:guest-share/ztp.log
+```
+
+To view this, you can use more
+
+```
+more flash:guest-share/ztp.log
+```
+
+## Examples
 
 This ZTP script has been succesfully tested with the following setup:
 
