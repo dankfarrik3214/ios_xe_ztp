@@ -63,6 +63,7 @@ ip dhcp pool DHCP_X
 ### ZTP server
 In order to make this ztp.py file available towards the Cisco IOS-XE device, it needs to be present on a server. On this server should be the following items:
 
+- **http via port 8080**: https is to be introduced later
 - **ztp.py script**: referenced in the option 67 option
 - **Firmware files**: To be able to download firmware files
 - **Configuration files**: (Optional)
