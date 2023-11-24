@@ -31,6 +31,7 @@ Currently only supporting IPv4.
 - **DHCP Server**: To receive an IP address.
 - **DHCP Server Options**: To instruct the ZTP process to fetch the ztp.py script.
 - **ZTP Server**: A server where the ZTP is.
+- **ZTP port 8080**: Server needs to listen to port 8080
 - **Minimum Firmware**: Check Supported Devices to see which firmware is supporting the ZTP script.
 - **Configuration Files**: (Optional)
 
