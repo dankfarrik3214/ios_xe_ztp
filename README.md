@@ -133,4 +133,4 @@ This project utilizes concepts and/or code from the following repository:
 
 - [Cisco IE's IOSXE_ZTP](https://github.com/cisco-ie/IOSXE_ZTP) - A repository by Cisco IE providing resources and examples for Zero Touch Provisioning on Cisco IOS XE.
 
-We thank the contributors of this repository for their work and encourage users to explore it for additional insights into ZTP on Cisco IOS XE devices.
+Thanks the contributors of this repository for their work and encourage users to explore it for additional insights into ZTP on Cisco IOS XE devices.
