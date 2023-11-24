@@ -45,12 +45,12 @@ It will save the ZTP file, start the guest-shell, and then execute the ztp.py fi
 ## Setup
 
 ### HTTP Server
-Change the following line in the ztp.py script towards your ZTP server:rver:
+Change the following line in the ztp.py script towards your ZTP server
 ```
 http_server = 'x.x.x.x'
 ```
 
-here x is the IP address of your server. This can also be its hostname, as long as DNS is working with the DHCP offer.
+x.x.x.x is the IP address of your server. This can also be its hostname, as long as DNS is working with the DHCP offer.
 
 ### Logging
 It's also possible to turn logging on or off. By default, it's on. To change this, change the boolean on this line in the ztp.py script.
