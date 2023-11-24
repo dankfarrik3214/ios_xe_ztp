@@ -103,7 +103,7 @@ These instructions can be propagated via the command pnp startup-vlan x (where x
 pnp startup-vlan 100
 ```
 
-It's also possible to boot a Cisco IOS-XE device without propagating the startup VLAN. However, this is done via a USB script. I've made a repo for this, which can be found in:
+It's also possible to boot a Cisco IOS-XE device without propagating the startup VLAN. However, this is done via a USB script. I've made a repo for this, which can be found in: https://github.com/dankfarrik3214/ztp_boot_usb_cisco_iosxe
 
 ## Configuration
 
@@ -161,3 +161,7 @@ This project utilizes concepts and/or code from the following repository:
 - [Cisco IE's IOSXE_ZTP](https://github.com/cisco-ie/IOSXE_ZTP) - A repository by Cisco IE providing resources and examples for Zero Touch Provisioning on Cisco IOS XE.
 
 Thanks to the contributors of this repository for their work and encourage users to explore it for additional insights into ZTP on Cisco IOS XE devices.
+
+## Relevant repositories:
+
+- https://github.com/dankfarrik3214/ztp_boot_usb_cisco_iosxe
