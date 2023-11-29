@@ -155,6 +155,13 @@ There are currently three options for configuration status:
 In the folder documentation, you will find examples of setups and configuration examples.
 Also, there will be documented flow charts.
 
+## Tools
+
+### validator_ztp_script
+
+You can use this tool to check if all firmware files with the models are present in folder and also this hashing.
+It's recommended to run this tool for the first time running it on the server and when there are new firmwares introduced.
+
 ## Credits and Acknowledgments
 
 This project utilizes concepts and/or code from the following repository:
