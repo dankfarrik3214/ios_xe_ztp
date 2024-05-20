@@ -1,46 +1,145 @@
 from cli import configure, cli, configurep, executep
 import re
 import time
-import urllib
 import sys
 import logging
-import os
 from logging.handlers import RotatingFileHandler
-import subprocess 
 
 # Global variable
 
-http_server = ''
+# Fallback on IP if DNS servers are not reachable from device
+http_server = 'x.x.x.x'
+# ZTP server settings
+http_server_fqdn = 'http://ztp.local'
+http_server_tcp_port = '8080'
+http_server_config_directory = '/config_files/'
+http_server_firmware_directory = '/images/'
+
+# e-mail vars
+mail_status = False
+sender_email = ""
+receiver_email = ""
+smtp_server = ""
+smtp_server_port = "" 
+
+# Logging to flash:guest-share/ztp.log
 log_tofile = True
 
+
 software_mappings = {
-    ### SWITCHES ###
     ## 9300 SERIES
+    'C9300-24P': {
+        'software_image': '',
+        'software_version': '', # DON'T FORGET THIS!
+        'software_md5_checksum': ''
+    },
+    'C9300-24S': {
+        'software_image': '',
+        'software_version': '', # DON'T FORGET THIS!
+        'software_md5_checksum': ''
+    },    
+    'C9300-48P': {
+        'software_image': '',
+        'software_version': '', # DON'T FORGET THIS!
+        'software_md5_checksum': ''
+    },
     'C9300-48S': {
         'software_image': '',
         'software_version': '', # DON'T FORGET THIS!
         'software_md5_checksum': ''
     },
-    ### 9200 CX series
-    'C9200CX-12P-2X2G': {
+    ## 9200 SERIES    
+    'C9200-48S': {
         'software_image': '',
         'software_version': '', # DON'T FORGET THIS!
         'software_md5_checksum': ''
-    },       
-    ## 9200 SERIES    
+    },
     'C9200-48P': {
         'software_image': '',
         'software_version': '', # DON'T FORGET THIS!
         'software_md5_checksum': ''
     },
-    ### WIRELESS CONTROLLERS ###
+    'C9200-24S': {
+        'software_image': '',
+        'software_version': '', # DON'T FORGET THIS!
+        'software_md5_checksum': ''
+    },    
+    'C9200-24P': {
+        'software_image': '',
+        'software_version': '', # DON'T FORGET THIS!
+        'software_md5_checksum': ''
+    },    
+    ## 9200CX SERIES    
+    'C9200CX-12P-2X2G': {
+        'software_image': '',
+        'software_version': '', # DON'T FORGET THIS!
+        'software_md5_checksum': ''
+    },
+    ## Wireless LAN Controllers
     'C9800-L-F-K9': {
         'software_image': '',
         'software_version': '', # DON'T FORGET THIS!
         'software_md5_checksum': ''
-    }                            
+    }                                 
 }
 
+def activate_beacon_led(model):
+    cli("send log 7 ### ZTP SCRIPT - DEVICE IS PREPPED - ACTIVATING BEACON LED ###")
+    print("### ZTP SCRIPT - DEVICE IS PREPPED - ACTIVATING BEACON LED ###")
+    log_info("### ZTP SCRIPT - DEVICE IS PREPPED - ACTIVATING BEACON LED ###")
+
+    # Moduel selection
+    if 'C9200CX-12P-2X2G' in model:
+        # Not supported
+        print("************************ Activating beacon LED ************************\n")
+        log_info("************************ Activating beacon LED ************************\n")           
+        cli('hw-module beacon slot 1 on')          
+
+    elif 'C9200' in model:
+        print("************************ Activating beacon LED ************************\n")
+        log_info("************************ Activating beacon LED ************************\n")           
+        try:
+            cli('hw-module beacon slot 1 on')
+
+        except Exception as e:
+            # Log unexpected exceptions
+            print(f"An unexpected error occurred: {e}. Trying different way to activate beacon")
+            log_info(f"An unexpected error occurred: {e}. Trying different way to activate beacon")
+            configure('#hw-module beacon on switch 1')
+
+    elif 'C9300' in model:
+        print("************************ Activating beacon LED ************************\n")
+        log_info("************************ Activating beacon LED ************************\n")           
+        cli('hw-module beacon slot 1 on')
+
+    elif 'C9800' in model:
+        # Not supported
+        print(f"********* {model} not supported for activating beacon led. Skipping task *********")
+        log_info(f"********* {model} not supported for activating beacon led. Skipping task *********")
+        cli(f"send log 7 ********* {model} not supported for activating beacon led. Skipping task *********")             
+
+    else:
+        # If no defined model is found
+        print(f"********* {model} not supported for activating beacon led. Skipping task *********")
+        log_info(f"********* {model} not supported for activating beacon led. Skipping task *********")
+        cli(f"send log 7 ********* {model} not supported for activating beacon led. Skipping task *********")                                   
+        
+def bug_work_around_696657788():
+    # This bug workaround is for the 9200 series that have more then two stack members
+    # TAC CASE: 696657788
+    eem_commands = ['event manager applet 9200_stack_bug_workaround',
+                    'event syslog occurs 1 pattern "SYS-5-RESTART" maxrun 600',
+                    'action 1.0 wait 180',
+                    'action 2.0 cli command "enable"',
+                    'action 3.0 cli command "write mem"',
+                    'action 4.1 cli command "erase startup-config" pattern "[confirm]"',
+                    'action 4.2 cli command "y"',
+                    'action 5.1 cli command "reload" pattern "[confirm]"',
+                    'action 5.2 cli command "y"',                                                                                                          
+                    ]
+    results = configurep(eem_commands)
+    print ('*** Successfully configured 9200_stack_bug_workaround script! ***')
+    log_info('*** Successfully configured 9200_stack_bug_workaround script! ***')      
 
 def clean_config_file(config_file):
     # Search if a config_file is present
@@ -127,10 +226,9 @@ def cisco_stack_v_mismatch_check(model):
                 results = configurep(eem_commands)
 
                 if "9300" in model:
+                    erase_startup_config()
                     cli("reload in 15 reason - *** Whole stack needs to restart in order for ZTP to work ***")
                     cli('event manager run autoupgrade')
-                    erase_startup_config()
-                    time.sleep(600)  # Wait for 15 minutes
 
                 else: 
                     print('*** Upgrade in progress. Waiting for 10 min ***')
@@ -151,15 +249,36 @@ def cisco_stack_v_mismatch_check(model):
             log_info(f"An error occurred: {e}")
 
 def clean_reload():
-    print('**** Starting Clean reload with no startup-config *******\n')
-    log_info('**** Starting Clean reload with no startup-config *******\n')
-    cli('erase startup-config')  # This command erases the startup configuration.
-    cli('reload')
+    # Reboot switch(es) with clean configuration
+    # Needed to enable to ZTP script from the beginning
+    if stack_switch_status == False:
+        # if single device
+        print('**** Starting Clean reload with no startup-config *******\n')
+        log_info('**** Starting Clean reload with no startup-config *******\n')
+        cli('erase startup-config')
+        cli('reload')
+    elif stack_switch_status == True:
+        # Clean configuration on whole stack
+        print('**** Starting Clean reload with no startup-config - ALL STACKED SWITCHES *******\n')
+        log_info('**** Starting Clean reload with no startup-config - ALL STACKED SWITCHES *******\n')
+        cli('erase startup-config')
+        cli('delete stby-nvram:startup-config')
+        cli('reload')
 
 def erase_startup_config():
-    print('**** Erasing config*******\n')
-    log_info('**** Erasing config*******\n')
+    print('**** Erasing config *******\n')
+    log_info('**** Erasing config *******\n')
     cli('erase startup-config')  # This command erases the startup configuration.   
+
+def configure_default_interfaces_c9800():
+    log_info("*** Removing pnp/ztp interface configuration ***")
+    default_interface_list = {
+        'TenGigabitEthernet0/1/0',
+        'TenGigabitEthernet0/1/1',
+    }
+    for interface in default_interface_list:
+        log_info(f"*** Applying default configuration for {interface} ***")                    
+        configure(f"default interface {interface}")
 
 def configure_replace(file,file_system='flash:/' ):
     config_command = 'configure replace %s%s force' % (file_system, file)
@@ -168,16 +287,31 @@ def configure_replace(file,file_system='flash:/' ):
     config_repl = executep(config_command)
     time.sleep(10)
     
-def configure_merge(file,file_system='flash:/'):
-     print("************************Merging running config with given config file************************\n")
-     log_info('************************Merging running config with given config file************************\n')
-     config_command = 'copy %s%s running-config' %(file_system,file)
-     config_repl = executep(config_command)
-     time.sleep(10)
+def configure_merge_file_to_running_config(file,file_system='flash:/'):
+    print("************************Merging running config with given config file************************\n")
+    log_info('************************Merging running config with given config file************************\n')
+    config_command = 'copy %s%s running-config' %(file_system,file)
+    config_repl = executep(config_command)
+    time.sleep(10)
+
+def configure_merge_file_to_startup_config(file,file_system='flash:/'):
+    print(f"************************Merging {config_file} with startup-config ************************\n")
+    log_info(f'************************Merging {config_file} with startup-config ************************\n')
+    config_command = 'copy %s%s startup-config' %(file_system,file)
+    config_repl = executep(config_command)
+    time.sleep(10)     
+
+def configure_replace_file_to_running_config(file,file_system='flash:'):
+    print(f"************************Replacing running config with {config_file} ************************\n")
+    log_info(f"************************Replacing running config with {config_file} ************************\n")
+    config_command = 'configure replace %s%s force' %(file_system,file)
+    log_info(f"DEBUG config_command {config_command}")
+    config_repl = executep(config_command)
+    time.sleep(10) 
 
 def configure_startup(file,file_system='flash:/'):
-     print("************************Merging startup config with given config file************************\n")
-     log_info('************************Merging startup config with given config file************************\n')
+     print(f"************************Merging {file} to startup config************************\n")
+     log_info(f"************************Merging {file} to startup config************************\n")
      config_command = 'copy %s%s startup-config' %(file_system,file)
      config_repl = executep(config_command)
      time.sleep(10)
@@ -220,15 +354,21 @@ def configure_logger(path):
     ztp_log.setLevel(logging.INFO)
     ztp_log.addHandler(log_handler)
     
-def configuration_transfer(http_server, file):
+def configuration_transfer(http_server, http_server_config_directory, config_file):
     # Transfers a file from an HTTP server to the flash storage on the device.
 
     try:
         print('**** Start transferring file *******\n')
         log_info('**** Start transferring file *******\n')
+
+        if http_server_firmware_directory != '':
+            url = f"http://{http_server}:{http_server_tcp_port}{http_server_config_directory}{config_file}"
+        elif http_server_firmware_directory == '':
+            url = f"http://{http_server}:{http_server_tcp_port}{config_file}"            
         
         # Run the command and capture the output
-        res = cli(f'copy http://{http_server}:8080/{file} flash:{file}')
+        res = cli(f'copy {url} flash:{config_file}')
+        #res = cli(f'copy http://{http_server}:8080{http_server_config_directory}{config_file} flash:{config_file}')
         
         # It's a good practice to log the full CLI response for debugging
         print(res)
@@ -255,39 +395,39 @@ def configuration_transfer(http_server, file):
         return configuration_present
 
 
-    # Transfers a file from an HTTP server to the flash storage on the device.
+    # # Transfers a file from an HTTP server to the flash storage on the device.
 
-    try:
+    # try:
 
-        print('**** Start transferring file *******\n')
-        log_info('**** Start transferring file *******\n')
+    #     print('**** Start transferring file *******\n')
+    #     log_info('**** Start transferring file *******\n')
         
-        # Run the command and capture the output
-        res = cli(f'copy http://{http_server}:8080/{file} flash:')
+    #     # Run the command and capture the output
+    #     res = cli(f'copy http://{http_server}:8080/{file} flash:')
         
-        # It's a good practice to log the full CLI response for debugging
-        print(res)
-        log_info(res)
+    #     # It's a good practice to log the full CLI response for debugging
+    #     print(res)
+    #     log_info(res)
         
-        # Check if there's an indication of a CLI syntax error or execution failure
-        if "cli syntax error or execution failure" in res.lower():
-            print('**** CLI syntax error or execution failure detected *******\n')
-            log_info('**** CLI syntax error or execution failure detected *******\n')
-            configuration_present = False
-            return configuration_present
+    #     # Check if there's an indication of a CLI syntax error or execution failure
+    #     if "cli syntax error or execution failure" in res.lower():
+    #         print('**** CLI syntax error or execution failure detected *******\n')
+    #         log_info('**** CLI syntax error or execution failure detected *******\n')
+    #         configuration_present = False
+    #         return configuration_present
 
-        else:
-            print('**** Finished transferring device configuration file *******\n')
-            log_info('**** Finished transferring device configuration file *******\n')
-            configuration_present = True
-            return configuration_present
+    #     else:
+    #         print('**** Finished transferring device configuration file *******\n')
+    #         log_info('**** Finished transferring device configuration file *******\n')
+    #         configuration_present = True
+    #         return configuration_present
 
-    except Exception as e:
-        # Log unexpected exceptions
-        print(f"An unexpected error occurred: {e}")
-        log_info(f"An unexpected error occurred: {e}")
-        configuration_present = False
-        return configuration_present
+    # except Exception as e:
+    #     # Log unexpected exceptions
+    #     print(f"An unexpected error occurred: {e}")
+    #     log_info(f"An unexpected error occurred: {e}")
+    #     configuration_present = False
+    #     return configuration_present
 
 def configuration_status(config_file):
     # Initialize configuration_status
@@ -301,10 +441,10 @@ def configuration_status(config_file):
         if first_match:
             if "active" == first_match:
                 configuration_status_value = "active"
-            elif "prep" == first_match:
-                configuration_status_value = "prep"
-            elif "decom" == first_match:
-                configuration_status_value = "decom"
+            if "planned" == first_match:
+                configuration_status_value = "planned"                
+            elif "decommissioning" == first_match:
+                configuration_status_value = "decommissioning"
             # Add more cases as needed
         else:
             configuration_status_value = "unknown"
@@ -318,8 +458,8 @@ def copy_startup_to_running():
      log_info('************************Merging startup config with running-config************************\n')
      config_command = 'copy startup-config running'
      config_repl = executep(config_command)
-     time.sleep(10)              
-
+     time.sleep(10)
+      
 def check_file_exists(file, file_system='flash:/'):
     dir_check = 'dir ' + file_system + file
     print ('*** Checking to see if %s exists on %s ***' % (file, file_system))
@@ -353,6 +493,9 @@ def day_zero_script_runner():
       
         log_info('###### STARTING ZTP SCRIPT ######\n')
 
+        # Todo download CA certificate
+        # ssl_installer()
+
         # Fetch device type
         device_type = get_device_type()
 
@@ -375,16 +518,16 @@ def day_zero_script_runner():
         # Download config from ZTP (based on serial number)
         print('**** Downloading config file ****\n')
         log_info('**** Downloading config file ****\n')
-        configuration_present = configuration_transfer(http_server, config_file)
+        configuration_present = configuration_transfer(http_server, http_server_config_directory, config_file)
 
         
-        if configuration_present == True:
-            # Saving configuration towards startup-configuration
-            print ('*** Trying to perform  Day 0 configuration push  ****')
-            log_info('*** Trying to perform  Day 0 configuration push  ****')
-            configure_startup(config_file)
+        # if configuration_present == True:
+        #     # Saving configuration towards startup-configuration
+        #     print ('*** Trying to perform  Day 0 configuration push  ****')
+        #     log_info('*** Trying to perform  Day 0 configuration push  ****')
+        #     configure_startup(config_file)
 
-        elif configuration_present == False:
+        if configuration_present == False:
             # Saving configuration towards startup-configuration
             print ('*** No configuration present on the ZTP server. No configuration will be saved  ****')
             log_info('*** No configuration present on the ZTP server. No configuration will be saved  ****')
@@ -397,17 +540,84 @@ def day_zero_script_runner():
         print(e)
         sys.exit(e) 
 
+def deactivate_beacon_led(model):
+    cli("send log 7 ### ZTP SCRIPT - SCRIPT STARTED - DEACTIVATING BEACON LED ###")
+    print("### ZTP SCRIPT - SCRIPT STARTED - DEACTIVATING BEACON LED ###")
+    log_info("### ZTP SCRIPT - SCRIPT STARTED - DEACTIVATING BEACON LED ###")
+
+    print(f'*** DEBUG: model: {model} ***')
+    log_info(f'*** DEBUG: model: {model} ***')         
+
+    # Moduel selection
+    if 'C9200CX-12P-2X2G' in model:
+        # Not supported
+        print("************************ Dectivating beacon LED ************************\n")
+        log_info("************************ Dctivating beacon LED ************************\n")          
+        cli('hw-module beacon slot 1 off')
+     
+    elif 'C9200' in model:
+        print("************************ Dectivating beacon LED ************************\n")
+        log_info("************************ Dctivating beacon LED ************************\n")           
+        try:
+            cli('hw-module beacon slot 1 off')
+
+        except Exception as e:
+            # Log unexpected exceptions
+            print(f"An unexpected error occurred: {e}. Trying different way to deactivate beacon")
+            log_info(f"An unexpected error occurred: {e}. Trying different way to deactivate beacon")
+            configure('#hw-module beacon of switch 1')
+
+    elif 'C9300' in model:
+        print("************************ Dectivating beacon LED ************************\n")
+        log_info("************************ Dctivating beacon LED ************************\n")          
+        cli('hw-module beacon slot 1 off')
+
+    elif 'C9800' in model:
+        # Not supported
+        print(f"********* {model} not supported for deactivating beacon led. Skipping task *********")
+        log_info(f"********* {model} not supported for deactivating beacon led. Skipping task *********")
+        cli(f"send log 7 ********* {model} not supported for deactivating beacon led. Skipping task *********")             
+
+    else:
+        # If no defined model is found
+        print(f"********* {model} not supported for deactivating beacon led. Skipping task *********")
+        log_info(f"********* {model} not supported for deactivating beacon led. Skipping task *********")
+        cli(f"send log 7 ********* {model} not supported for deactivating beacon led. Skipping task *********")                               
+
 def disable_dna_discovery():
-    print('**** Stopping dnac discovery *******\n')
-    log_info('**** Stopping dnac discovery *******\n')
-    res = cli('pnpa service discovery stop')       
+
+    cli("send log 7 ### ZTP SCRIPT - DEACTIVATING DNA CONFIGURATION ###")
+    print("### ZTP SCRIPT - DEACTIVATING DNA CONFIGURATION ###")
+    log_info("### ZTP SCRIPT - DEACTIVATING DNA CONFIGURATION ###")
+
+    try:
+        print('**** Stopping dnac discovery *******\n')
+        log_info('**** Stopping dnac discovery *******\n')
+        cli('pnpa service discovery stop')
+        
+    except Exception as e:
+        # Log unexpected exceptions
+        print(f"An unexpected error occurred: {e}.")
+        log_info(f"An unexpected error occurred: {e}.")
+
+    try:
+        print('**** Removing dnac pnp certificate *******\n')
+        log_info('**** Removing dnac pnp certificate *******\n')
+        cli('pnpa service trustpoint-uninstall SLA-TrustPoint')
+        cli('pnpa service trustpool-uninstall')
+
+        
+    except Exception as e:
+        # Log unexpected exceptions
+        print(f"An unexpected error occurred: {e}.")
+        log_info(f"An unexpected error occurred: {e}.")            
 
 def deploy_eem_cleanup_script():
-    install_command = 'install remove inactive'
+    install_remove_inactive_command = 'install remove inactive'
     eem_commands = ['event manager applet cleanup',
                     'event none maxrun 600',
                     'action 1.0 cli command "enable"',
-                    'action 2.0 cli command "%s" pattern "\[y\/n\]"' % install_command,
+                    'action 2.0 cli command "%s" pattern "\[y\/n\]"' % install_remove_inactive_command,
                     'action 2.1 cli command "y" pattern "proceed"',
                     'action 2.2 cli command "y"'
                     ]
@@ -415,12 +625,48 @@ def deploy_eem_cleanup_script():
     print ('*** Successfully configured cleanup EEM script on device! ***')
     log_info('*** Successfully configured cleanup EEM script on device! ***')
 
+def deploy_eem_cleanup_script_reload():
+    install_remove_inactive_command = 'install remove inactive'
+    eem_commands = ['event manager applet cleanup_reload',
+                    'event none maxrun 600',
+                    'action 1.0 wait 15',
+                    'action 2.0 cli command "enable"',
+                    'action 3.0 cli command "%s" pattern "\[y\/n\]"' % install_remove_inactive_command,
+                    'action 4.1 cli command "y" pattern "proceed"',
+                    'action 4.2 cli command "y"'
+                    ]
+    results = configurep(eem_commands)
+    print ('*** Successfully configured cleanup EEM script on device! ***')
+    log_info('*** Successfully configured cleanup EEM script on device! ***')
+
+def deploy_eem_clean_config_reload():
+    install_command_remove_inactive = 'install remove inactive'    
+    eem_commands = ['event manager applet CLEAR_CONFIG_AND_RELOAD',
+                    'event syslog pattern "SYS-5-RESTART" maxrun 31536000',
+                    'action 1.0 wait 180',
+                    'action 2.0 cli command "enable"',
+                    'action 3.0 cli command "configure terminal"',
+                    'action 3.1 cli command "event manager applet upgrade"',
+                    'action 3.2 cli command "no event manager applet upgrade"',
+                    'action 3.3 cli command "exit"',
+                    'action 3.4 syslog msg "removed upgrade script"',
+                    'action 4.0 cli command "write mem"',
+                    'action 4.1 cli command "reload in 5" pattern "confirm"',
+                    'action 4.2 cli command "y"',
+                    'action 5.0 cli command "erase startup-config" pattern "confirm"',
+                    'action 5.1 cli command "y"',
+                    'action 6.0 syslog msg "Configuration erased and device will reload in 5 minutes"',
+                    'action 7.0 policy cleanup_reload'
+                    ]
+    results = configurep(eem_commands)
+    print('*** Successfully configured cleanup EEM CLEAR_CONFIG_AND_RELOAD script on device! ***')
+    log_info('*** Successfully configured cleanup EEM CLEAR_CONFIG_AND_RELOAD script on device! ***') 
+
 def deploy_eem_upgrade_script(image):
     
     # upgrade or downgrade is in install mode
     # Cleaning switch for next reboot
     erase_startup_config()
-
     try:
         # Upgrade process
         install_command = 'install add file flash:' + image + ' activate commit'
@@ -434,6 +680,29 @@ def deploy_eem_upgrade_script(image):
         results = configurep(eem_commands)
         print ('*** Successfully configured upgrade EEM script on device! ***')
         log_info('*** Successfully configured upgrade EEM script on device! ***')
+
+    except Exception as e:
+        print("Error with upgrade switch:", e)
+        log_info(f"Error with upgrade switch: {e}") 
+
+def deploy_eem_config_activation_c9800(file,file_system='flash:'):
+    try:
+        # activate configuration script
+        config_activate_command = 'configure replace %s%s force' %(file_system,file)
+        eem_commands = ['event manager applet config_activate',
+                        'event none maxrun 600', 
+                        'action 1.0 wait 120',
+                        'action 2.0 cli command "enable"',
+                        'action 3.0 cli command "%s"' % config_activate_command,
+                        ]
+        results = configurep(eem_commands)
+        print ('*** Successfully configured config activation EEM script on device! ***')
+        log_info('*** Successfully configured config activation EEM script on device! ***')
+
+        # Running EEM script
+        cli('event manager run config_activate')
+        print ('*** Configuration will be soon activated towards running-configuration! ***')
+        log_info ('*** Configuration will be soon activated towards running-configuration! ***')   
 
     except Exception as e:
         print("Error with upgrade switch:", e)
@@ -474,6 +743,28 @@ def file_transfer(http_server, file):
   print('**** Finished transferring device configuration file *******\n')
   log_info('**** Finished transferring device configuration file *******\n')
 
+def firmware_transfer(http_server,file):
+    # Transfer firmware to device
+    print('**** Start transferring  file *******\n')
+    log_info('**** Start transferring  file *******\n')
+
+    if http_server_firmware_directory != '':
+        url = f"http://{http_server}:{http_server_tcp_port}{http_server_firmware_directory}{file}"
+    elif http_server_firmware_directory == '':
+        url = f"http://{http_server}:{http_server_tcp_port}{file}"    
+
+    try:
+        res = cli(f'copy {url} flash:{file}')
+        print(res)
+        log_info(res)
+        print("\n")
+        print('**** Finished transferring device configuration file *******\n')
+        log_info('**** Finished transferring device configuration file *******\n')
+
+    except Exception as e:
+        print(f"An error occurred while transfering firmware {e}")
+        log_info(f"An error occurred while transfer firmware: {e}")
+
 def find_certs():
     certs = cli('show run | include crypto pki')
     if certs:
@@ -488,27 +779,29 @@ def firmware_upgrade_selector(model):
     if 'C9200CX-12P-2X2G' in model:
         # Running upgrade function for C9200
         print("Cisco C9200CX-12P-2X2G model detected for software upgrade")
-        upgrade_runner_cisco_ios_xe_9200_cx(model)
+        firmware_upgrade_status = upgrade_runner_cisco_ios_xe_9200_cx(model)
 
     elif 'C9200' in model:
         # Running upgrade function for C9200
         print("Cisco 9200 model detected for software upgrade")
-        upgrade_runner_cisco_ios_xe_9200(model)
+        firmware_upgrade_status = upgrade_runner_cisco_ios_xe_9200(model, config_file)
 
     elif 'C9300' in model:
         # Running upgrade function for C9300
         print("Cisco 9300 model detected for software upgrade")
-        upgrade_runner_cisco_ios_xe_9300(model)
+        firmware_upgrade_status = upgrade_runner_cisco_ios_xe_9300(model)
 
     elif 'C9800' in model:
-        # Running upgrade function for C9800
+        # Running upgrade function for C9300
         print("Cisco 9300 model detected for software upgrade")
-        upgrade_runner_cisco_ios_xe_9800(model)
+        firmware_upgrade_status = upgrade_runner_cisco_ios_xe_9800(model)
 
     else:
         # If no defined model is found
         print("Model not supported in firmware upgrade, skipping task")
-        pass
+        
+    
+    return firmware_upgrade_status
 
 def get_device_type():
     print("******** Trying to get Device type *********** ")
@@ -532,6 +825,11 @@ def get_device_type():
         log_info("******** Device type - Wireless controller detected *********** ")          
         device_type = "wlc"
         return device_type
+    elif "Router" in show_inventory:
+        print("******** Device type - Wireless controller detected *********** ")
+        log_info("******** Device type - Wireless controller detected *********** ")          
+        device_type = "router"
+        return device_type    
     else:
         print("******** Device type - Failed to detect Device type *********** ")
         log_info("******** Device type - Failed to detect Device type *********** ")    
@@ -668,10 +966,10 @@ def main_task_printer():
         cli("send log 7 *** Save config file to running configuration ***")
         time.sleep(2)
 
-    elif configuration_status_value == "prep":
-        print('######  ZTP SCRIPT DETECTED - CONFIGURATION PREP ######\n')
-        log_info('######  ZTP SCRIPT DETECTED - CONFIGURATION PREP ######')
-        cli("send log 7 ######  ZTP SCRIPT DETECTED - CONFIGURATION PREP ######")
+    elif configuration_status_value == "planned":
+        print('######  ZTP SCRIPT DETECTED - CONFIGURATION PLANNED ######\n')
+        log_info('######  ZTP SCRIPT DETECTED - CONFIGURATION PLANNED ######')
+        cli("send log 7 ######  ZTP SCRIPT DETECTED - CONFIGURATION PLANNED ######")
         time.sleep(2)
 
         print('######  ZTP SCRIPT TASKS WILL BE ######\n')
@@ -682,15 +980,15 @@ def main_task_printer():
         print("*** Software upgrade check  ***\n")
         log_info("*** Software upgrade check  ***")
         cli("send log 7 *** Software upgrade check  ***")
-        print("*** Erase startup config ***\n")
-        log_info("*** Erase startup config ***")
-        cli("send log 7 *** Erase startup config ***")
+        print("*** copy configuration file to startup config ***\n")
+        log_info("*** copy configuration file to startup config ***")
+        cli("send log 7 *** copy configuration file to startup config ***")
         time.sleep(2)
 
-    elif configuration_status_value == "decom":
-        print('######  ZTP SCRIPT DETECTED - CONFIGURATION DECOM ######\n')
-        log_info('######  ZTP SCRIPT DETECTED - CONFIGURATION DECOM ######')
-        cli("send log 7 ######  ZTP SCRIPT DETECTED - CONFIGURATION DECOM ######")
+    elif configuration_status_value == "decommissioning":
+        print('######  ZTP SCRIPT DETECTED - CONFIGURATION DECOMMISSIONING ######\n')
+        log_info('######  ZTP SCRIPT DETECTED - CONFIGURATION DECOMMISSIONING ######')
+        cli("send log 7 ######  ZTP SCRIPT DETECTED - CONFIGURATION DECOMMISSIONING ######")
         time.sleep(2)
 
         print('######  ZTP SCRIPT TASKS WILL BE ######\n')
@@ -714,10 +1012,14 @@ def main_task_printer():
         cli("send log 7 ######  ZTP SCRIPT TASKS WILL BE  ######")
         time.sleep(2)
               
+        print("*** Software upgrade check  ***\n")
+        log_info("*** Software upgrade check  ***")
+        cli("send log 7 *** Software upgrade check  ***")
         print("*** Erase startup config ***\n")
         log_info("*** Erase startup config ***")
         cli("send log 7 *** Erase startup config ***")
         time.sleep(2)
+
 
     print('######  END OF TASK LIST ######\n')
     log_info('######  END OF TASK LIST ######')
@@ -744,6 +1046,61 @@ def save_configuration():
     log_info('**** Saving config*******\n')
     cli('write mem')  # This command saves the startup configuration.
 
+def send_email_status(serial, model, configuration_status_value, firmware_upgrade_status):
+    ### Form message for mail based on ZTP actions
+
+    def message_body():
+        if configuration_status_value == "active":
+            mail_text = "Golden firmware image present and configuration merged to running-config."
+            return mail_text
+        
+        elif configuration_status_value == "planned":
+            mail_text = "Golden firmware image present and clean startup-config for next boot."
+            return mail_text
+                    
+        elif configuration_status_value == "unknown":
+            mail_text = "Golden firmware image present and clean startup-config for next boot."
+            return mail_text
+        
+        elif configuration_status_value == "decommissioning":
+            mail_text = "Configuration removed and clean startup-config for next boot."
+            return mail_text
+
+    def mailer():
+        # Send the email
+        try:
+            subject = f"ZTP SERVER: DEVICE {model} - {serial} Configuration status: {configuration_status_value}"
+            send_mail_line = f'{smtp_server}" port {smtp_server_port} to "{receiver_email}" from "{sender_email}" subject "{subject}" body "{mail_text}'
+
+            eem_commands = ['event manager applet SendEmail',
+                            'event none maxrun 600',
+                            'action 1.0 cli command "enable"',
+                            'action 2.0 mail server "%s"' % send_mail_line,
+                            ]
+
+            results = configurep(eem_commands)
+            cli("event manager run SendEmail")
+            time.sleep(5)
+
+            print('###### Email sent successfully! ######\n')
+            log_info('###### Email sent successfully! ######\n')
+            cli("send log 7 '###### Email sent successfully! ######")                                   
+        except Exception as e:
+            print(f'###### Failed to send email: {e} ######\n')
+            log_info(f'###### Failed to send email: {e} ######\n')
+            cli("send log 7 '###### Failed to send email ######")                    
+
+    if firmware_upgrade_status == False:
+        # Form mail text
+        mail_text = message_body()
+        # Send mail
+        mailer()            
+    elif firmware_upgrade_status == True:
+        # Form mail text
+        mail_text = f"{serial} will upgrade to Golden image on reboot with startup config."
+        # Send mail
+        mailer()
+
 def switch_stack_task_selector():
     if stack_switch_status == True:
         ## switch numbering task
@@ -764,6 +1121,16 @@ def switch_stack_prio_renumbering(config_file):
     log_info("******** Checking if switch stack priority renumbering is needed based on config *********** ")
 
     time.sleep(60)
+
+    # count switches
+    def count_switches():
+        try:
+            show_switch_output = cli('show switch')
+            switch_count = re.findall(r"^\s*\*?(\d+)\s+", show_switch_output, re.MULTILINE)
+            return len(switch_count)
+        except Exception as e:
+            print("Error counting switches:", e)
+            log_info(f"Error counting switches: {e}")
 
     def switch_stack_prio_renumbering_task(config_file):
 
@@ -790,6 +1157,78 @@ def switch_stack_prio_renumbering(config_file):
                 try:
                     # Get the priority of the switch
                     priority_match = re.search(fr"^\s*\*?{switch_number}\s+(Active|Standby)\s+\S+\s+(\d+)\s+", show_switch, re.MULTILINE)
+                    priority = priority_match.group(2)
+
+                    # Get the serial number of the switch
+                    serial_match = re.search(fr'NAME: "Switch {switch_number}".*?PID:.*?,.*?SN: (\S+)', show_inventory, re.DOTALL)
+                    serial_number = serial_match.group(1)
+
+                    current_setup[int(switch_number)] = (serial_number, int(priority))
+                except Exception as e:
+                    print(f"Error while fetching info for switch {switch_number}: {e}")
+            
+            return current_setup
+
+        def fetch_config_instructions():
+            instructions = {}
+            show_stack_config = cli(f"more flash:{config_file}")
+            matches = re.findall(r"! stack member (\d+) (\S+) priority (\d+)", show_stack_config)
+            for match in matches:
+                instructions[int(match[0])] = (match[1], int(match[2]))
+            return instructions
+
+        current_setup = fetch_current_setup()
+        config_instructions = fetch_config_instructions()
+        
+        # Loop to check if the priority per switch member is correct
+        for stack_member, (serial, priority) in config_instructions.items():
+            current_serial, current_priority = current_setup.get(stack_member, (None, None))
+
+            if current_serial is None:
+                print(f"Stack member {stack_member} is not present in the current setup.")
+                log_info(f"Stack member {stack_member} is not present in the current setup.")
+                continue
+            
+            if current_serial != serial:
+                print(f"Serial for stack member {stack_member} doesn't match: {current_serial} != {serial}")
+                log_info(f"Serial for stack member {stack_member} doesn't match: {current_serial} != {serial}")
+                continue
+            
+            if current_priority != priority:
+                print(f"Changing priority for stack member {stack_member} from {current_priority} to {priority}")
+                log_info(f"Changing priority for stack member {stack_member} from {current_priority} to {priority}")
+                cli(f"switch {stack_member} priority {priority} ")
+
+            else:
+                print(f"No priority renumbering needed for {stack_member}, config is in sync with setup")
+                log_info(f"No priority renumbering needed for {stack_member}, config is in sync with setup") 
+
+    def switch_stack_prio_renumbering_task_trio_stack(config_file):
+
+        # This function checks if the priority numbers are correct of the switches based on the configuration
+        # It will change if these are not in sync
+
+        def fetch_current_setup():
+            current_setup = {}
+            
+            # Fetch 'show switch' data
+            show_switch = cli('show switch')
+            
+            # Fetch active and standby switch numbers
+            active_switches = re.findall(r"^\s*\*?(\d+)\s+Active", show_switch, re.MULTILINE)
+            standby_switches = re.findall(r"^\s*\*?(\d+)\s+Standby", show_switch, re.MULTILINE)
+            member_switches = re.findall(r"^\s*\*?(\d+)\s+Member", show_switch, re.MULTILINE)
+            
+            # Fetch 'show inventory' data
+            show_inventory = cli('show inventory')
+
+            # Consolidate switch numbers into a list for easy iteration
+            switch_numbers = active_switches + standby_switches + member_switches
+            
+            for switch_number in switch_numbers:
+                try:
+                    # Get the priority of the switch
+                    priority_match = re.search(fr"^\s*\*?{switch_number}\s+(Active|Standby|Member)\s+\S+\s+(\d+)\s+", show_switch, re.MULTILINE)
                     priority = priority_match.group(2)
 
                     # Get the serial number of the switch
@@ -897,27 +1336,99 @@ def switch_stack_prio_renumbering(config_file):
             else:
                 print(f"Switch {switch_number} is currently {switch_data['current_role']}. It is correctly set to be {expected_role} and has a priority of {switch_data['priority']}.")
 
-    # Running functions
-    switch_stack_prio_renumbering_task(config_file)
-    switch_stack_prio_reboot_task(config_file)
+    # Runner of function
+    # In the switch_stack_renumbering function
+    switch_count = count_switches()
+
+    # Selector based on how many switches are in the stack
+    if switch_count == 2:
+        # Running function for stack of two members
+        switch_stack_prio_renumbering_task(config_file)
+    elif switch_count == 3:
+        # Running function for stack of three members
+        switch_stack_prio_renumbering_task_trio_stack(config_file)
+    else:
+        print(f"Stack member count is {switch_count}. Not supported yet")
+        log_info(f"Stack member count is {switch_count}. Not supported yet")
+
+    if switch_count <= 3:
+        # Reboot task if switch(es) need to change role
+        switch_stack_prio_reboot_task(config_file)
 
 def switch_stack_renumbering(config_file, model):
     print("******** Checking if switch stack renumbering is needed based on config *********** ")
     log_info("******** Checking if switch stack renumbering is needed based on config *********** ")
-
     time.sleep(60)
 
-    # Get stack info
+    # Segmented in two types
+    # 1. For stack members of two
+    # 3. For stack members of three
+
+    # Renumbering has a difference in syntax for 9300 and 9200
+
+    # count switches
+    def count_switches():
+        try:
+            show_switch_output = cli('show switch')
+            switch_count = re.findall(r"^\s*\*?(\d+)\s+", show_switch_output, re.MULTILINE)
+            return len(switch_count)
+        except Exception as e:
+            print("Error counting switches:", e)
+            log_info(f"Error counting switches: {e}")
+    # Get stack info for two member stack situation
     def get_active_standby_switches():
         try:
             show_switch = cli('show switch')
             active_switch = re.search(r"^\s*\*?(\d+)\s+Active", show_switch, re.MULTILINE).group(1)
             standby_switch = re.search(r"^\s*\*?(\d+)\s+Standby", show_switch, re.MULTILINE).group(1)
+
+            print(f"******** Active switch {active_switch} *********** ")
+            log_info(f"******** Active switch {active_switch} *********** ")            
+            print(f"******** Standby switch {standby_switch} *********** ")
+            log_info(f"******** Standby switch {standby_switch} *********** ")   
+
             return active_switch, standby_switch
         except Exception as e:
             print("Error getting active and standby switches:", e)
             log_info(f"Error getting active and standby switches: {e}")
+    # Get stack info if the are more then two members in the stack
+    def get_active_standby_member_switches():
+        try:
+            show_switch_output = cli('show switch')
+            active_switch = re.search(r"^\s*\*?(\d+)\s+Active", show_switch_output, re.MULTILINE).group(1)
+            standby_switch = re.search(r"^\s*\*?(\d+)\s+Standby", show_switch_output, re.MULTILINE).group(1)
+            # member_switches = re.search(r"^\s*\*?(\d+)\s+Member", show_switch_output, re.MULTILINE).group(1)
+            
+            member_switches_pattern = r"^\s*(\d+)\s+Member" if switch_count > 3 else r"^\s*\*?(\d+)\s+Member"
+            member_switches = re.findall(member_switches_pattern, show_switch_output, re.MULTILINE)
 
+            print(f"******** Active switch {active_switch} *********** ")
+            log_info(f"******** Active switch {active_switch} *********** ")            
+            print(f"******** Standby switch {standby_switch} *********** ")
+            log_info(f"******** Standby switch {standby_switch} *********** ")            
+            print(f"******** Member switches {member_switches} *********** ")
+            log_info(f"******** Member switches {member_switches} *********** ")            
+
+            return active_switch, standby_switch, member_switches
+
+        except Exception as e:
+            print("Error getting active and standby switches:", e)
+            log_info(f"Error getting active and standby switches: {e}")        
+    # Get member info (if the stack is with three members)
+    def get_member_switch():
+        try:
+            show_switch_output = cli('show switch')
+            member_switch = re.search(r"^\s*\*?(\d+)\s+Member", show_switch_output, re.MULTILINE).group(1)      
+            print(f"******** Member switch is {member_switch} *********** ")
+            log_info(f"******** Member switch is {member_switch} *********** ")            
+            return member_switch
+        except Exception as e:
+            print("Error getting member switch:", e)
+            log_info(f"Error getting member switch: {e} ")              
+    # Get members info (if the stack is with more then three members)        
+    def get_members_switch():
+        y = "y"
+    # Corolate switch numbers with serial numbers
     def get_serial_by_switch_number(switch_number):
         try:
             show_inventory = cli('show inventory')
@@ -926,68 +1437,201 @@ def switch_stack_renumbering(config_file, model):
         except Exception as e:
             print("Error getting serial by switch number:", e)
             log_info(f"Error getting serial by switch number: {e}")
-
-    active_switch, standby_switch = get_active_standby_switches()
-
-    show_stack_config = cli(f"more flash:{config_file}")
-    stack_members = re.findall(r"! stack member (\d+) (\S+)", show_stack_config)
-
-    switch_info = {}
-    for switch, serial in stack_members:
-        switch_info[serial] = {"switch": switch}
-
-    active_info = switch_info.get(get_serial_by_switch_number(active_switch), {})
-    standby_info = switch_info.get(get_serial_by_switch_number(standby_switch), {})
-
-    print("******** Current stack switch situation *********** ")
-    log_info("******** Current stack switch situation *********** ")
-    
-    if active_switch != active_info.get('switch') or standby_switch != standby_info.get('switch'):
-        print("Mismatch found between configuration file and current switch setup.")
-        log_info("Mismatch found between configuration file and current switch setup.")
+    # Corrective actions for two stack members
+    def correction_active_standby_switches():
+        print("******** Current stack switch situation *********** ")
+        log_info("******** Current stack switch situation *********** ")
         
+        if active_switch != active_info.get('switch') or standby_switch != standby_info.get('switch'):
+            print("Mismatch found between configuration file and current switch setup.")
+            log_info("Mismatch found between configuration file and current switch setup.")
+            
 
-        # Changes if needed
-        print("Corrective actions:")
-        log_info("Corrective actions:")
+            # Changes if needed
+            print("Corrective actions:")
+            log_info("Corrective actions:")
 
-        ## For Cisco 9200 series (stack)
-        if 'C9200' in model:
-            if active_switch != active_info.get('switch'):
-                print(f"Reconfigure Switch {active_switch} to be Switch {active_info.get('switch')}.")
-                log_info(f"Reconfigure Switch {active_switch} to be Switch {active_info.get('switch')}.")
-                cli(f"switch {active_switch} renumber {active_info.get('switch')}")
-                cli(f"switch {standby_switch} renumber {standby_info.get('switch')}")
-                save_configuration()
-                clean_reload()
+            ## For Cisco 9200 series (stack)
+            if 'C9200' in model:
+                if active_switch != active_info.get('switch'):
+                    print(f"Reconfigure Switch {active_switch} to be Switch {active_info.get('switch')}.")
+                    log_info(f"Reconfigure Switch {active_switch} to be Switch {active_info.get('switch')}.")
+                    cli(f"switch {active_switch} renumber {active_info.get('switch')}")
+                    cli(f"switch {standby_switch} renumber {standby_info.get('switch')}")
+                    save_configuration()
+                    clean_reload()
 
-            if standby_switch != standby_info.get('switch'):
-                print(f"Reconfigure Switch {standby_switch} to be Switch {standby_info.get('switch')}.")
-                log_info(f"Reconfigure Switch {standby_switch} to be Switch {standby_info.get('switch')}.")
-                cli(f"switch {active_switch} renumber {active_info.get('switch')}")
-                cli(f"switch {standby_switch} renumber {standby_info.get('switch')}")
-                save_configuration()
-                clean_reload()
+                if standby_switch != standby_info.get('switch'):
+                    print(f"Reconfigure Switch {standby_switch} to be Switch {standby_info.get('switch')}.")
+                    log_info(f"Reconfigure Switch {standby_switch} to be Switch {standby_info.get('switch')}.")
+                    cli(f"switch {active_switch} renumber {active_info.get('switch')}")
+                    cli(f"switch {standby_switch} renumber {standby_info.get('switch')}")
+                    save_configuration()
+                    clean_reload()
 
-        ## For Cisco 9300 series (stack)
-        elif 'C9300' in model:
-            if active_switch != active_info.get('switch'):
-                print(f"Reconfigure Switch {active_switch} to be Switch {active_info.get('switch')}.")
-                log_info(f"Reconfigure Switch {active_switch} to be Switch {active_info.get('switch')}.")
-                cli(f"switch {active_switch} renumber {active_info.get('switch')}")
-                save_configuration()
-                clean_reload()
+            ## For Cisco 9300 series (stack)
+            elif 'C9300' in model:
+                if active_switch != active_info.get('switch'):
+                    print(f"Reconfigure Switch {active_switch} to be Switch {active_info.get('switch')}.")
+                    log_info(f"Reconfigure Switch {active_switch} to be Switch {active_info.get('switch')}.")
+                    cli(f"switch {active_switch} renumber {active_info.get('switch')}")
+                    save_configuration()
+                    clean_reload()
 
-            if standby_switch != standby_info.get('switch'):
-                print(f"Reconfigure Switch {standby_switch} to be Switch {standby_info.get('switch')}.")
-                log_info(f"Reconfigure Switch {standby_switch} to be Switch {standby_info.get('switch')}.")
-                cli(f"switch {standby_switch} renumber {standby_info.get('switch')}")
-                save_configuration()
-                clean_reload()
+                if standby_switch != standby_info.get('switch'):
+                    print(f"Reconfigure Switch {standby_switch} to be Switch {standby_info.get('switch')}.")
+                    log_info(f"Reconfigure Switch {standby_switch} to be Switch {standby_info.get('switch')}.")
+                    cli(f"switch {standby_switch} renumber {standby_info.get('switch')}")
+                    save_configuration()
+                    clean_reload()
 
-    else:
-        print("No switch stack renumbering is needed. Config in sync with switch nummers.")
-        log_info("No switch stack renumbering is needed. Config in sync with switch nummers.")
+        else:
+            print("No switch stack renumbering is needed. Config in sync with switch nummers.")
+            log_info("No switch stack renumbering is needed. Config in sync with switch nummers.")
+    # Corrective actions for stacked switches larger then two members
+    def correction_active_standby_members_switches():
+
+        # Debug
+        print(f"current active switch = {active_switch} configuration switch = {active_info.get('switch')}")
+        log_info(f"current active switch = {active_switch} configuration switch = {active_info.get('switch')}")
+        print(f"current standby standby = {standby_switch} configuration switch = {standby_info.get('switch')}")
+        log_info(f"current standby standby = {standby_switch} configuration switch = {standby_info.get('switch')}")                       
+        print(f"current member switch = {member_switch} configuration switch = {member_info.get('switch')}")
+        log_info(f"current member switch = {member_switch} configuration switch = {member_info.get('switch')}")
+
+        print("******** Correcting Stack Switch Numbers *********** ")
+        log_info("******** Correcting Stack Switch Numbers *********** ")
+
+        if active_switch != active_info.get('switch') or standby_switch != standby_info.get('switch') or member_switch != member_info.get('switch'):
+            print("Mismatch found between configuration file and current switch setup.")
+            log_info("Mismatch found between configuration file and current switch setup.")
+
+            # Changes if needed
+            print("Corrective actions:")
+            log_info("Corrective actions:")
+
+            ## For Cisco 9200 series (stack)
+            if 'C9200' in model:
+                if member_switch != member_info.get('switch'):                    
+                    print(f"Reconfigure Switch {member_switch} to be Switch {member_info.get('switch')}.")
+                    log_info(f"Reconfigure Switch {member_switch} to be Switch {member_info.get('switch')}.")
+
+                    if active_switch != active_info.get('switch'):                       
+                        cli(f"switch {member_switch} renumber {member_info.get('switch')}")                        
+                        cli(f"switch {active_switch} renumber {active_info.get('switch')}")
+                        bug_work_around_696657788()
+                        save_configuration()
+                        cli("reload")                   
+            
+
+                    if standby_switch != standby_info.get('switch'):                                               
+                        cli(f"switch {member_switch} renumber {member_info.get('switch')}")
+                        cli(f"switch {standby_switch} renumber {standby_info.get('switch')}")                    
+                        bug_work_around_696657788()
+                        save_configuration()
+                        cli("reload")
+
+                if active_switch != active_info.get('switch') and standby_switch != standby_info.get('switch'):
+                    print(f"Reconfigure Switch {active_switch} to be Switch {active_info.get('switch')}.")
+                    log_info(f"Reconfigure Switch {active_switch} to be Switch {active_info.get('switch')}.")
+                    cli(f"switch {active_switch} renumber {active_info.get('switch')}")
+                    cli(f"switch {standby_switch} renumber {standby_info.get('switch')}")
+                    bug_work_around_696657788()
+                    save_configuration()
+                    cli("reload")
+                    #clean_reload()
+
+                # if standby_switch != standby_info.get('switch'):
+                #     print(f"Reconfigure Switch {standby_switch} to be Switch {standby_info.get('switch')}.")
+                #     log_info(f"Reconfigure Switch {standby_switch} to be Switch {standby_info.get('switch')}.")
+                #     cli(f"switch {active_switch} renumber {active_info.get('switch')}")
+                #     cli(f"switch {standby_switch} renumber {standby_info.get('switch')}")
+                #     save_configuration()
+                #     clean_reload()
+
+            ## For Cisco 9300 series (stack)
+            elif 'C9300' in model:
+                if active_switch != active_info.get('switch'):
+                    print(f"Reconfigure Switch {active_switch} to be Switch {active_info.get('switch')}.")
+                    log_info(f"Reconfigure Switch {active_switch} to be Switch {active_info.get('switch')}.")
+                    cli(f"switch {active_switch} renumber {active_info.get('switch')}")
+                    save_configuration()
+                    clean_reload()
+
+                if standby_switch != standby_info.get('switch'):
+                    print(f"Reconfigure Switch {standby_switch} to be Switch {standby_info.get('switch')}.")
+                    log_info(f"Reconfigure Switch {standby_switch} to be Switch {standby_info.get('switch')}.")
+                    cli(f"switch {standby_switch} renumber {standby_info.get('switch')}")
+                    save_configuration()
+                    clean_reload()
+
+                if member_switch != member_info.get('switch'):
+                    print(f"Reconfigure Switch {standby_switch} to be Switch {standby_info.get('switch')}.")
+                    log_info(f"Reconfigure Switch {standby_switch} to be Switch {standby_info.get('switch')}.")
+                    cli(f"switch {member_switch} renumber {member_info.get('switch')}")
+                    save_configuration()
+                    clean_reload()                    
+
+        else:
+            print("No switch stack renumbering is needed. Config in sync with switch nummers.")
+            log_info("No switch stack renumbering is needed. Config in sync with switch nummers.")              
+
+    # Runner of function
+    # In the switch_stack_renumbering function
+    switch_count = count_switches()
+    print(f"******** Switches in stack: {switch_count}  *********** ")
+    log_info(f"******** Switches in stack: {switch_count}  *********** ")
+
+
+    # For stacks with only two members
+    if (switch_count) == 2:
+        # Information gathering
+        active_switch, standby_switch = get_active_standby_switches()
+        
+        show_stack_config = cli(f"more flash:{config_file}")
+        stack_members = re.findall(r"! stack member (\d+) (\S+)", show_stack_config)
+
+        # Corolation loop: switch numbering based on configuration to serial
+        switch_info = {}
+        for switch, serial in stack_members:
+            switch_info[serial] = {"switch": switch}
+        
+        active_info = switch_info.get(get_serial_by_switch_number(active_switch), {})
+        standby_info = switch_info.get(get_serial_by_switch_number(standby_switch), {})
+
+        # Correction handler
+        correction_active_standby_switches()
+
+    # For stacks with more then two members        
+    elif (switch_count) > 2:       
+        # For stacks with more two members
+        # Information handler
+        active_switch, standby_switch = get_active_standby_switches()
+        
+        show_stack_config = cli(f"more flash:{config_file}")
+        stack_members = re.findall(r"! stack member (\d+) (\S+)", show_stack_config)
+
+        # Corolation loop: switch numbering based on configuration to serial
+        switch_info = {}
+        for switch, serial in stack_members:
+            switch_info[serial] = {"switch": switch}
+
+        active_info = switch_info.get(get_serial_by_switch_number(active_switch), {})
+        standby_info = switch_info.get(get_serial_by_switch_number(standby_switch), {})
+
+        if switch_count == 3:
+            member_switch = get_member_switch()
+            member_info = switch_info.get(get_serial_by_switch_number(member_switch), {})
+        # elif switch_count > 3:
+        #      # Todo --> Function to corolate members to switch numbers
+        #     print("******** Stacks with more then three members not supported yet for renumbering  *********** ")
+        #     log_info("******** Stacks with more then three members not supported yet for renumbering  *********** ")
+        #     break        
+        # Correction handler
+
+        print(f"******** stack members detected {stack_members}  *********** ")
+        log_info(f"******** stack members detected {stack_members}  *********** ")
+        correction_active_standby_members_switches()
 
 def update_config(file,file_system='flash:/'):
     update_running_config = 'copy %s%s running-config' % (file_system, file)
@@ -995,27 +1639,6 @@ def update_config(file,file_system='flash:/'):
     print("************************Copying to startup-config************************\n")
     running_config = executep(update_running_config)
     startup_config = executep(save_to_startup)
-
-def upgrade_required_old(target_version):
-    # Obtains show version output
-    sh_version = cli('show version')
-    current_version = re.search(r"Cisco IOS XE Software, Version\s+(\S+)", sh_version).group(1)
-    print('**** Current Code Version is %s ****** \n' % current_version)
-    print('**** Target Code Version is %s ****** \n' % target_version)
-    log_info('**** Current Code Version is %s ****** \n' % current_version)
-    log_info('**** Target Code Version is %s ****** \n' % target_version)
- 
-    # Convert version strings to integers by removing dots
-    target_version_int = int(target_version.replace('.', ''))
-    current_version_int = int(current_version.replace('.', ''))
- 
-    # Compare the version integers
-    if target_version_int == current_version_int:
-        return False, current_version
-    elif target_version_int > current_version_int:
-        return 'upgrade', current_version
-    elif target_version_int < current_version_int:
-        return 'downgrade', current_version
 
 def upgrade_required(target_version):
     def version_components(version):
@@ -1051,19 +1674,27 @@ def upgrade_required(target_version):
 
 def upgrade_runner_cisco_ios_xe_9200_cx(model):
 
-    def deploy_9200_cx_eem_upgrade_script(software_image):
+    def deploy_9200_cx_eem_upgrade_script(software_image, config_file):
         # Upgrade action is preformed after guest-shell is detroyed (to make more space on storage)
         print ('*** Performing the upgrade in 300 seconds - switch will reboot ***\n')
         log_info('*** Performing the upgrade in 300 seconds - switch will reboot ***\n')
         # Upgrade process
         install_command = 'install add file flash:' + software_image + ' activate commit prompt-level none'
+        merge_config_to_startup = f'copy flash:{config_file} startup-config'
         eem_commands = ['event manager applet upgrade',
-                        'event timer countdown time 300',
+                        'event timer countdown time 300 maxrun 1200',
                         'action 1.0 cli command "enable"',
-                        'action 2.0 cli command "write mem"',
-                        'action 3.0 cli command "%s"' % install_command,
+                        'action 2.0 cli command "configure terminal"',
+                        'action 3.1 cli command "file prompt quiet"',
+                        'action 3.2 cli command "exit"',
+                        'action 4.0 cli command "write mem"',
+                        'action 5.0 cli command "%s"' % install_command,                                       
+                        'action 6.0 cli command "%s"' % merge_config_to_startup, 
+                        'action 7.0 cli command "configure terminal"',
+                        'action 7.1 cli command "no file prompt quiet"',
+                        'action 7.2 cli command "exit"',
                         ]
-        results = configurep(eem_commands)    
+        results = configurep(eem_commands)
 
     def deploy_9200_cx_eem_reboot_clean():
         eem_commands = ['event manager applet reboot_clean',
@@ -1101,30 +1732,43 @@ def upgrade_runner_cisco_ios_xe_9200_cx(model):
             log_info('*** Attempting to transfer image to switch.. ***')
             
             # Download firmware
-            file_transfer(http_server, software_image)
+            print ('*** Attempting to transfer image to flash.. ***')
+            log_info('*** Attempting to transfer image to flash.. ***')
+            firmware_transfer(http_server ,software_image)
 
         # md5 hash checker
         verify_dst_image_md5(software_image, software_md5_checksum)
-
-        # Put config on switch
-        copy_startup_to_running()
-
+                            
         # Add post reload cleaner script
         deploy_9200_cx_eem_reboot_clean()             
 
-        # Save new config
-        save_configuration()
-
         ## Deploy upgrade script
-        deploy_9200_cx_eem_upgrade_script(software_image)
+        deploy_9200_cx_eem_upgrade_script(software_image, config_file)
 
         # Run upgrade script
-        #print('*** Upgrading switch - Reload while start soon ***')
-        #log_info('*** Upgrading switch - Reload while start soon ***')     
-        #cli("event manager run upgrade")
+        print('*** Upgrading switch - Reload while start soon ***')
+        log_info('*** Upgrading switch - Reload while start soon ***')     
+        cli("event manager run upgrade")
 
-        # Exit guest shell worker
-        exit_guest_shell()                                 
+        ### Remove configuration reload (To invoke ZTP again, if device has no configuration) ###
+        if configuration_status_value == "planned" or configuration_status_value == "unknown":
+            # Removing all the configuration    
+            cli("send log 7 ### ZTP SCRIPT - REMOVING START-UP CONFIGURATION")
+            deploy_eem_cleanup_script_reload()   
+            deploy_eem_clean_config_reload()
+            save_configuration()        
+
+        ### Merging configuration to startup to let the 9800 start with configuration
+        if configuration_status_value == "active":
+            # Merge configuration file from ztp to startup
+            configure_merge_file_to_startup_config(config_file) 
+
+        # Return firmware upgrade status
+        firmware_upgrade_status = True
+        return firmware_upgrade_status                             
+
+    # Set firmware upgrade status default on false
+    firmware_upgrade_status = False
 
    # Main function runner        
     try:
@@ -1144,7 +1788,7 @@ def upgrade_runner_cisco_ios_xe_9200_cx(model):
             # Upgrade is required
             print ('*** Upgrade is required!!! *** \n')
             log_info('*** Upgrade is required!!! *** \n')
-            cisco_9200_cx_update_runner(current_version, software_image)
+            firmware_upgrade_status = cisco_9200_cx_update_runner(current_version, software_image)
 
         # downgrade task
         elif firmware_action == 'downgrade':            
@@ -1152,19 +1796,26 @@ def upgrade_runner_cisco_ios_xe_9200_cx(model):
             # Upgrade is required
             print ('*** Downgrade is required!!! *** \n')
             log_info('*** Downgrade is required!!! *** \n')
-            cisco_9200_cx_update_runner(current_version, software_image)
-        
+            firmware_upgrade_status = cisco_9200_cx_update_runner(current_version, software_image)
+            
         else:
-          print ('*** No upgrade is required!!! *** \n')
-          log_info('*** No upgrade is required!!! *** \n')
+            print ('*** No upgrade is required!!! *** \n')
+            log_info('*** No upgrade is required!!! *** \n')
+            firmware_upgrade_status = False
 
+        return firmware_upgrade_status               
+           
     except Exception as e:
         print('*** Failure encountered during upgrade of software **\n')
         log_critical('*** Failure encountered during upgrade of software ***\n' + e)
         print(e)
         sys.exit(e)
 
-def upgrade_runner_cisco_ios_xe_9200(model):
+def upgrade_runner_cisco_ios_xe_9200(model, config_file):
+
+    # This function upgrades the Cisco 9200 series. 
+    # The code looks a bit sloppy, but this is because there is limit
+    # storage space on the drive.
 
     def cisco_9200_flash_cleaner(current_version):
         # Delete current firmware version and files to make space
@@ -1192,7 +1843,7 @@ def upgrade_runner_cisco_ios_xe_9200(model):
             print(f'*** Failure to make room on flash for upgrade: {e} ***\n')
             log_critical(f'*** Failure to make room on flash for upgrade: {e} ***\n')
 
-    def cisco_9200_flash_cleaner_stack(current_version):
+    def cisco_9200_flash_cleaner_stack(current_version): 
         # Detect how many flash drives are present
         show_switch = cli('show switch')
         switches = re.findall(r"^\s*\*?(\d+)\s+", show_switch, re.MULTILINE)
@@ -1222,61 +1873,88 @@ def upgrade_runner_cisco_ios_xe_9200(model):
             print(f'*** Failure to make room on flash for upgrade: {e} ***\n')
             log_critical(f'*** Failure to make room on flash for upgrade: {e} ***\n')
 
-    def deploy_9200_eem_reboot_clean():
-        eem_commands = ['event manager applet reboot_clean',
-                        'event syslog pattern "SYS-5-RESTART" maxrun 600',
-                        'action 1.0 wait 180',
-                        'action 2.0 cli command "enable"',
-                        'action 3.0 cli command "configure terminal"',
-                        'action 4.0 cli command "no event manager applet upgrade"',
-                        'action 5.0 cli command "exit"',
-                        'action 6.0 cli command "install remove inactive" pattern "Do you want to remove the above files?"',
-                        'action 7.0 cli command "y"'         
-                        ]
-        results = configurep(eem_commands)
-        print ('*** Successfully configured cleanup EEM reboot cleaner script on device! ***')
-        log_info('*** Successfully configured cleanup EEM reboot cleaner script on device! ***')        
-
-    def deploy_9200_eem_reboot_clean_stack():
-        eem_commands = ['event manager applet reboot_clean',
-                        'event syslog pattern "SYS-5-RESTART" maxrun 600',
-                        'action 1.0 wait 220',
-                        'action 2.0 cli command "enable"',
-                        'action 3.0 cli command "configure terminal"',
-                        'action 4.0 cli command "no event manager applet upgrade"',
-                        'action 5.0 cli command "exit"',
-                        'action 6.0 cli command "install remove inactive" pattern "Do you want to remove the above files?"',
-                        'action 7.0 cli command "y"'         
-                        ]
-        results = configurep(eem_commands)
-        print ('*** Successfully configured cleanup EEM reboot cleaner script on device! ***')
-        log_info('*** Successfully configured cleanup EEM reboot cleaner script on device! ***')     
-
-    def deploy_9200_eem_upgrade_script(software_image):
+    def deploy_9200_eem_upgrade_script(software_image, config_file):
         # Upgrade action is preformed after guest-shell is detroyed (to make more space on storage)
-        print ('*** Performing the upgrade in 300 seconds - switch will reboot ***\n')
-        log_info('*** Performing the upgrade in 300 seconds - switch will reboot ***\n')
+        print ('*** Performing the upgrade in 360 seconds - switch will reboot ***\n')
+        log_info('*** Performing the upgrade in 360 seconds - switch will reboot ***\n')
         # Upgrade process
         install_command = 'install add file flash:' + software_image + ' activate commit prompt-level none'
+        merge_config_to_startup = f'copy flash:{config_file} startup-config'
         eem_commands = ['event manager applet upgrade',
-                        'event timer countdown time 300',
+                        'event timer countdown time 360 maxrun 1200',
                         'action 1.0 cli command "enable"',
-                        'action 2.0 cli command "write mem"',
-                        'action 3.0 cli command "%s"' % install_command,
+                        'action 2.0 cli command "configure terminal"',
+                        'action 3.1 cli command "file prompt quiet"',
+                        'action 3.2 cli command "exit"',
+                        'action 4.0 cli command "write mem"',
+                        'action 5.0 cli command "%s"' % merge_config_to_startup,                        
+                        'action 6.0 cli command "%s"' % install_command,                                       
+                        'action 7.0 cli command "%s"' % merge_config_to_startup, 
+                        'action 8.0 cli command "configure terminal"',
+                        'action 8.1 cli command "no file prompt quiet"',
+                        'action 8.2 cli command "exit"',
                         ]
         results = configurep(eem_commands)
 
-    def deploy_9200_eem_upgrade_script_stack(software_image):
+    def deploy_9200_eem_upgrade_script_stack(software_image, config_file):
+        # Upgrade action is preformed after guest-shell is detroyed (to make more space on storage)
+        print ('*** Performing the upgrade in 360 seconds - switch will reboot ***\n')
+        log_info('*** Performing the upgrade in 360 seconds - switch will reboot ***\n')
+        # Upgrade process
+        install_command = 'install add file flash:' + software_image + ' activate commit prompt-level none'
+        merge_config_to_startup = f'copy flash:{config_file} startup-config'
+        eem_commands = ['event manager applet upgrade',
+                        'event timer countdown time 360 maxrun 1200',
+                        'action 1.0 cli command "enable"',
+                        'action 2.0 cli command "configure terminal"',
+                        'action 3.1 cli command "file prompt quiet"',
+                        'action 3.2 cli command "exit"',
+                        'action 4.0 cli command "write mem"',
+                        'action 5.0 cli command "%s"' % install_command,                                       
+                        'action 6.0 cli command "%s"' % merge_config_to_startup, 
+                        'action 7.0 cli command "configure terminal"',
+                        'action 7.1 cli command "no file prompt quiet"',
+                        'action 7.2 cli command "exit"',
+                        ]
+        results = configurep(eem_commands)
+
+    def deploy_9200_eem_upgrade_script_clean(software_image, config_file):
         # Upgrade action is preformed after guest-shell is detroyed (to make more space on storage)
         print ('*** Performing the upgrade in 360 seconds - switch will reboot ***\n')
         log_info('*** Performing the upgrade in 360 seconds - switch will reboot ***\n')
         # Upgrade process
         install_command = 'install add file flash:' + software_image + ' activate commit prompt-level none'
         eem_commands = ['event manager applet upgrade',
-                        'event timer countdown time 360',
+                        'event timer countdown time 360 maxrun 1200',
                         'action 1.0 cli command "enable"',
-                        'action 2.0 cli command "write mem"',
-                        'action 3.0 cli command "%s"' % install_command,
+                        'action 2.0 cli command "configure terminal"',
+                        'action 3.1 cli command "file prompt quiet"',
+                        'action 3.2 cli command "exit"',
+                        'action 4.0 cli command "write mem"',                    
+                        'action 6.0 cli command "%s"' % install_command,                                       
+                        'action 7.0 cli command "configure terminal"',
+                        'action 7.1 cli command "no file prompt quiet"',
+                        'action 7.2 cli command "exit"',
+                        ]
+        results = configurep(eem_commands)
+
+    def deploy_9200_eem_upgrade_script_stack_clean(software_image, config_file):
+        # Upgrade action is preformed after guest-shell is detroyed (to make more space on storage)
+        print ('*** Performing the upgrade in 360 seconds - switch will reboot ***\n')
+        log_info('*** Performing the upgrade in 360 seconds - switch will reboot ***\n')
+        # Upgrade process
+        install_command = 'install add file flash:' + software_image + ' activate commit prompt-level none'
+        eem_commands = ['event manager applet upgrade',
+                        'event timer countdown time 360 maxrun 1200',
+                        'action 1.0 cli command "enable"',
+                        'action 2.0 cli command "configure terminal"',
+                        'action 3.1 cli command "file prompt quiet"',
+                        'action 3.2 cli command "exit"',
+                        'action 4.0 cli command "write mem"',
+                        'action 5.0 cli command "%s"' % install_command,                                       
+                        'action 6.0 cli command "configure terminal"',
+                        'action 6.1 cli command "no file prompt quiet"',
+                        'action 6.2 cli command "exit"',
                         ]
         results = configurep(eem_commands)
 
@@ -1287,7 +1965,13 @@ def upgrade_runner_cisco_ios_xe_9200(model):
         log_info('*** Deploying clean up script ***')
         deploy_eem_cleanup_script()
         cli('event manager run cleanup')
-        time.sleep(30) 
+        # Wait until cleanup is done
+        if stack_switch_status == True:
+            time.sleep(120) 
+        # single upgrade
+        elif stack_switch_status == False: 
+            time.sleep(30)       
+
         
         # Extra file remover        
         print("Cisco 9200 series detected, using 9200 flash cleaner")
@@ -1315,35 +1999,47 @@ def upgrade_runner_cisco_ios_xe_9200(model):
             cisco_9200_flash_cleaner(current_version)
             
             # Download firmware
-            file_transfer(http_server, software_image)
+            print ('*** Attempting to transfer image to flash.. ***')
+            log_info('*** Attempting to transfer image to flash.. ***')
+            firmware_transfer(http_server ,software_image)
 
         # md5 hash checker
         verify_dst_image_md5(software_image, software_md5_checksum)
 
-        # Put config on switch
-        copy_startup_to_running()
-
-        # Add post reload cleaner script
-        if stack_switch_status == True:
-            deploy_9200_eem_reboot_clean_stack()
-        # single upgrade
-        elif stack_switch_status == False: 
-            deploy_9200_eem_reboot_clean()             
-
-        # Save new config
-        save_configuration()
 
         ## Deploy upgrade script
-        # stack upgrade
-        if stack_switch_status == True:
-            deploy_9200_eem_upgrade_script_stack(software_image)
-        # single upgrade
-        elif stack_switch_status == False: 
-            deploy_9200_eem_upgrade_script(software_image)        
+        # activate configuration after reload
+        if configuration_status_value == "active":
+            # stack upgrade
+            if stack_switch_status == True:
+                deploy_9200_eem_upgrade_script_stack(software_image, config_file)
+            # single upgrade
+            elif stack_switch_status == False: 
+                deploy_9200_eem_upgrade_script(software_image, config_file)
 
-        # Exit guest shell worker
-        exit_guest_shell()                                 
+        # Deploy upgrade with no configuration save
+        if configuration_status_value == "planned" or configuration_status_value == "unknown":
+            # stack upgrade
+            if stack_switch_status == True:
+                deploy_9200_eem_upgrade_script_clean(software_image, config_file)
+            # single upgrade
+            elif stack_switch_status == False: 
+                deploy_9200_eem_upgrade_script_stack_clean(software_image, config_file)  
 
+        ### Remove configuration reload (To invoke ZTP again, if device has no configuration) ###
+        if configuration_status_value == "planned" or configuration_status_value == "unknown":
+            # Removing all the configuration    
+            cli("send log 7 ### ZTP SCRIPT - REMOVING START-UP CONFIGURATION")   
+            deploy_eem_clean_config_reload()
+
+        # Make storage free after reboot to ensure that space is free
+        deploy_eem_cleanup_script_reload()
+        
+
+        # Return firmware upgrade status
+        firmware_upgrade_status = True
+        return firmware_upgrade_status
+                                                                                         
     # Main function runner        
     try:
         software_image = software_mappings[model]['software_image']
@@ -1362,19 +2058,24 @@ def upgrade_runner_cisco_ios_xe_9200(model):
             # Upgrade is required
             print ('*** Upgrade is required!!! *** \n')
             log_info('*** Upgrade is required!!! *** \n')
-            cisco_9200_update_runner(current_version, software_image)
+            # upgrade runner
+            firmware_upgrade_status = cisco_9200_update_runner(current_version, software_image)
 
         # downgrade task
         elif firmware_action == 'downgrade':            
-
             # Upgrade is required
             print ('*** Downgrade is required!!! *** \n')
             log_info('*** Downgrade is required!!! *** \n')
-            cisco_9200_update_runner(current_version, software_image)
-        
+            # downgrade runner
+            firmware_upgrade_status = cisco_9200_update_runner(current_version, software_image)
+
         else:
-          print ('*** No upgrade is required!!! *** \n')
-          log_info('*** No upgrade is required!!! *** \n')
+            print ('*** No upgrade is required!!! *** \n')
+            log_info('*** No upgrade is required!!! *** \n')
+            firmware_upgrade_status = False
+                  
+        return firmware_upgrade_status   
+
 
     except Exception as e:
         print('*** Failure encountered during upgrade of software **\n')
@@ -1421,7 +2122,7 @@ def upgrade_runner_cisco_ios_xe_9300(model):
         log_info('*** Deploying clean up script ***')
         deploy_eem_cleanup_script()
         cli('event manager run cleanup')
-        time.sleep(30) 
+        time.sleep(30)
             
         ## Check if image transfer needed (boolean)
         # If image excists on flash drives:
@@ -1434,14 +2135,13 @@ def upgrade_runner_cisco_ios_xe_9300(model):
             log_info('*** Attempting to transfer image to switch.. ***')
             
             # Download firmware
-            file_transfer(http_server, software_image)
+            print ('*** Attempting to transfer image to flash.. ***')
+            log_info('*** Attempting to transfer image to flash.. ***')
+            firmware_transfer(http_server ,software_image)
 
         # md5 hash checker
         verify_dst_image_md5(software_image, software_md5_checksum)
-
-        # Put config on switch
-        copy_startup_to_running()
-
+        
         # Add post reload cleaner script
         deploy_9300_eem_reboot_clean()             
 
@@ -1456,8 +2156,28 @@ def upgrade_runner_cisco_ios_xe_9300(model):
         log_info('*** Upgrading switch - Reload while start soon ***')     
         cli("event manager run upgrade")
 
-        # Exit guest shell worker
-        exit_guest_shell()                                 
+
+        ### Remove configuration reload (To invoke ZTP again, if device has no configuration) ###
+        if configuration_status_value == "planned" or configuration_status_value == "unknown":
+            # Removing all the configuration    
+            cli("send log 7 ### ZTP SCRIPT - REMOVING START-UP CONFIGURATION")
+            deploy_eem_cleanup_script_reload()   
+            deploy_eem_clean_config_reload()
+            save_configuration()       
+
+        if configuration_status_value == "active":
+            # Merge configuration file from ztp to startup
+            configure_merge_file_to_startup_config(config_file)
+            
+            # Because Cisco makes there products not uniform, the script has to dubble save
+            # The start-up configuration. And stop the whole script from working
+            if stack_switch_status == True:
+                configure_merge_file_to_startup_config(config_file)
+                configure_ssh_keys()
+                time.sleep(24000)
+
+        firmware_upgrade_status = True
+        return firmware_upgrade_status                               
 
    # Main function runner        
     try:
@@ -1477,7 +2197,7 @@ def upgrade_runner_cisco_ios_xe_9300(model):
             # Upgrade is required
             print ('*** Upgrade is required!!! *** \n')
             log_info('*** Upgrade is required!!! *** \n')
-            cisco_9300_update_runner(current_version, software_image)
+            firmware_upgrade_status = cisco_9300_update_runner(current_version, software_image)          
 
         # downgrade task
         elif firmware_action == 'downgrade':            
@@ -1485,11 +2205,14 @@ def upgrade_runner_cisco_ios_xe_9300(model):
             # Upgrade is required
             print ('*** Downgrade is required!!! *** \n')
             log_info('*** Downgrade is required!!! *** \n')
-            cisco_9300_update_runner(current_version, software_image)
-        
+            firmware_upgrade_status = cisco_9300_update_runner(current_version, software_image)
+                   
         else:
-          print ('*** No upgrade is required!!! *** \n')
-          log_info('*** No upgrade is required!!! *** \n')
+            print ('*** No upgrade is required!!! *** \n')
+            log_info('*** No upgrade is required!!! *** \n')
+            firmware_upgrade_status = False
+                  
+        return firmware_upgrade_status   
 
     except Exception as e:
         print('*** Failure encountered during upgrade of software **\n')
@@ -1499,17 +2222,40 @@ def upgrade_runner_cisco_ios_xe_9300(model):
 
 def upgrade_runner_cisco_ios_xe_9800(model):
 
-    def deploy_9800_eem_upgrade_script(software_image):
+    def deploy_9800_eem_upgrade_script(software_image, config_file):
+        # Upgrade action is preformed after guest-shell is detroyed (to make more space on storage)
+        print ('*** Performing the upgrade in 360 seconds - WLC will reboot ***\n')
+        log_info('*** Performing the upgrade in 360 seconds - WLC will reboot ***\n')
+        # Upgrade process
+        install_command = 'install add file flash:' + software_image + ' activate commit prompt-level none'
+        merge_config_to_startup = f'copy flash:{config_file} startup-config'
+        eem_commands = ['event manager applet upgrade',
+                        'event timer countdown time 360 maxrun 1200',
+                        'action 1.0 cli command "enable"',
+                        'action 2.0 cli command "configure terminal"',
+                        'action 3.1 cli command "file prompt quiet"',
+                        'action 3.2 cli command "exit"',
+                        'action 4.0 cli command "write mem"',
+                        'action 5.0 cli command "%s"' % merge_config_to_startup,                        
+                        'action 6.0 cli command "%s"' % install_command,                                       
+                        'action 7.0 cli command "%s"' % merge_config_to_startup, 
+                        'action 8.0 cli command "configure terminal"',
+                        'action 8.1 cli command "no file prompt quiet"',
+                        'action 8.2 cli command "exit"',                       
+                        ]
+        results = configurep(eem_commands)
 
-        print ('*** Performing the upgrade - WLC will reboot ***\n')
-        log_info('*** Performing the upgrade - WLC will reboot ***\n')
+    def deploy_9800_eem_upgrade_script_clean(software_image, config_file):
+        # Upgrade action is preformed after guest-shell is detroyed (to make more space on storage)
+        print ('*** Performing the upgrade in 360 seconds - WLC will reboot ***\n')
+        log_info('*** Performing the upgrade in 360 seconds - WLC will reboot ***\n')
         # Upgrade process
         install_command = 'install add file flash:' + software_image + ' activate commit prompt-level none'
         eem_commands = ['event manager applet upgrade',
-                        'event none maxrun 600',
+                        'event timer countdown time 360 maxrun 1200',
                         'action 1.0 cli command "enable"',
-                        'action 2.0 cli command "write mem"',
-                        'action 3.0 cli command "%s"' % install_command,
+                        'action 2.0 cli command "write mem"',                    
+                        'action 3.0 cli command "%s"' % install_command,                                       
                         ]
         results = configurep(eem_commands)
 
@@ -1543,40 +2289,41 @@ def upgrade_runner_cisco_ios_xe_9800(model):
             cli("event manager run cleanup")
             time.sleep(300)
 
-
-            print ('*** Attempting to transfer image to WLC.. ***')
-            log_info('*** Attempting to transfer image to WLC.. ***')
-            
             # Download firmware
-            file_transfer(http_server, software_image)
+            print ('*** Attempting to transfer image to flash.. ***')
+            log_info('*** Attempting to transfer image to flash.. ***')
+            firmware_transfer(http_server ,software_image)
 
         # md5 hash checker
         verify_dst_image_md5(software_image, software_md5_checksum)
 
-        # Put config on switch
-        copy_startup_to_running()
-
         # Add post reload cleaner script
         deploy_9800_eem_reboot_clean()             
 
-        # Save new config
-        save_configuration()
+        # Activating boot config
+        configurep("boot sys flash bootflash:packages.conf")
 
-        ## Deploy upgrade script
-        deploy_9800_eem_upgrade_script(software_image)
+        
+        ### Remove configuration reload (To invoke ZTP again, if device has no configuration) ###
+        if configuration_status_value == "planned" or configuration_status_value == "unknown":
+            # Removing all the configuration    
+            cli("send log 7 ### ZTP SCRIPT - REMOVING START-UP CONFIGURATION")
+            deploy_eem_cleanup_script_reload()   
+            deploy_eem_clean_config_reload()
+            deploy_9800_eem_upgrade_script_clean(software_image, config_file)
 
-        # Run upgrade script
-        print('*** Upgrading WLC - Reload while start soon ***')
-        log_info('*** Upgrading WLC - Reload while start soon ***')     
-        save_configuration()
-        cli("event manager run upgrade")
+        ### Merging configuration to startup to let the 9800 start with configuration
+        if configuration_status_value == "active":
+            # Merge configuration file from ztp to startup
+            deploy_9800_eem_upgrade_script(software_image, config_file) 
 
-        time.sleep(900)
+        
+        # Return firmware upgrade status
+        firmware_upgrade_status = True
+        return firmware_upgrade_status 
 
-        # Exit guest shell worker
-        exit_guest_shell()         
-
-   # Main function runner        
+                        
+   # Main function runner      
     try:
         software_image = software_mappings[model]['software_image']
         software_version = software_mappings[model]['software_version']
@@ -1590,30 +2337,33 @@ def upgrade_runner_cisco_ios_xe_9800(model):
 
         # Upgrade taskdir 
         if firmware_action == 'upgrade':
-
             # Upgrade is required
             print ('*** Upgrade is required!!! *** \n')
             log_info('*** Upgrade is required!!! *** \n')
             cisco_9800_update_runner(current_version, software_image)
+            firmware_upgrade_status = True
+            return firmware_upgrade_status                   
 
         # downgrade task
-        elif firmware_action == 'downgrade':            
-
+        elif firmware_action == 'downgrade':           
             # Upgrade is required
             print ('*** Downgrade is required!!! *** \n')
             log_info('*** Downgrade is required!!! *** \n')
-            cisco_9800_update_runner(current_version, software_image)
-        
+            firmware_upgrade_status = cisco_9800_update_runner(current_version, software_image)
+                              
         else:
           print ('*** No upgrade is required!!! *** \n')
           log_info('*** No upgrade is required!!! *** \n')
+          firmware_upgrade_status = False
+          
+        return firmware_upgrade_status           
 
     except Exception as e:
         print('*** Failure encountered during upgrade of software **\n')
         log_critical('*** Failure encountered during upgrade of software ***\n' + e)
         print(e)
         sys.exit(e)
-
+           
 def verify_dst_image_md5(image, src_md5, file_system='flash:/'):
     # Function to check MD5 hashing with firmware file
     print('*** Checking MD5 Hashing on firmware file ***')
@@ -1629,8 +2379,6 @@ def verify_dst_image_md5(image, src_md5, file_system='flash:/'):
         elif src_md5 not in check_md5_on_firmware:
             print('!!! !WARNING! - MD5 HASH DOES NOT MATCH FIRMWARE FILE! !POSSIBLE BREACH! CANCELING DEPLOYMENT OF ZTP !!!')
             log_info('!!! !WARNING! - MD5 HASH DOES NOT MATCH FIRMWARE FILE! !POSSIBLE BREACH! CANCELING DEPLOYMENT OF ZTP !!!')
-            print(f'!!! !WARNING! - REMOVE IMAGE FROM DEVICE {image} !!!')
-            log_info(f'!!! !WARNING! - REMOVE IMAGE FROM DEVICE {image} !!!')
             
             # If md5 check fails, the ZTP wil stop and will not reboot the switch for safety reasons
             print('*** Failure encountered during day 0 provisioning . Aborting ZTP script execution.  ***')
@@ -1671,32 +2419,51 @@ def ztp_script_main_cleaner():
 
 def main():
 
+    ### ZTP SCRIPT - WORK FLOW ###
+    # 1. Day zero function
+    # 2. Fetch configuration status
+    # 3. Print tasks
+    # 4. Switch renumbering & priority tasks
+    # 5. (Optional) remove startup-config for decommisioning, planned or unkown status devices
+    # 6. (Optional) Upgrade software for planned or unknown status devices
+    # 7. (Optional) Activate configuration for devices with status active
+    # 8. (Optional) Activate beacon led if switch has status planned or unknown, and update status is false
+    # 9. (Optional) Mail ZTP status if mail_status is active and upgrade is false (otherwise it will send a false ready status)
+    # 10. Close and exit ZTP script
+
     # cli send log is for when the ztp script is run outside of
     # auto installer. Running the ztp script directly results
     # running the script in the background. With no terminal log
 
-    # Global vars
+    ### Global vars ###
     global configuration_status_value, config_file, model, serial, stack_switch_status
 
-    # Log for starting ZTP script
+    ### Log for starting ZTP script ###
     cli("send log 7 ### ZTP SCRIPT - STARTED")
+
+    ### ZTP script element checker ####
+    #http_server = ztp_script_verify()
     
-    # Day zero runner
+    ### Day zero runner ###
     cli("send log 7 ### ZTP SCRIPT - STARTING DAY ZERO SCRIPT")
     config_file, device_type, model, serial, stack_switch_status = day_zero_script_runner()
 
-    # Check configuration status
+    ### Deactivate becaon led, because cisco is full of bugs :) ###
+    deactivate_beacon_led(model)
+
+    ### Check configuration status ###
     cli("send log 7 ### ZTP SCRIPT - VALIDATING CONFIGURATION")    
     configuration_status_value = configuration_status(config_file)
 
-    # Print tasks
+    ### Print tasks ###
     cli("send log 7 ### ZTP SCRIPT - TASK OVERVIEW")        
     main_task_printer()
 
+    ### Switch renumbering ###
     if device_type == "switch":
         ### Switch stack version runner ###
-        # Don't run stack software sync if device is decom 
-        if configuration_status_value != "decom":
+        # Don't run stack software sync if device is decommissioning 
+        if configuration_status_value != "decommissioning":
             cli("send log 7 ### ZTP SCRIPT - FIRMWARE VERSION SYNC TASK ")         
             cisco_stack_v_mismatch_check(model) 
     
@@ -1705,35 +2472,83 @@ def main():
             cli("send log 7 ### ZTP SCRIPT - STACK NUMBERING AND PRIORITY TASK")           
             switch_stack_task_selector()    
 
-    ### software upgrade section ###
-    # Don't run software upgrade if device needs decom
-    if configuration_status_value != "decom":
-        cli("send log 7 ### ZTP SCRIPT - SOFTWARE UPGRADE TASK")      
-        firmware_upgrade_selector(model)
-
-    ### Configuration activation ###
-    if configuration_status_value == "active":  
-        # activating configuration
-        cli(f"send log 7 ### ZTP SCRIPT - ACTIVATING {config_file}")            
-        configure_merge(config_file)
-        configure_ssh_keys()
-
-    ### Decom and prep task ###
-    if configuration_status_value == "decom" or configuration_status_value == "prep":
+    ### decommissioning, planned and unknown task ###
+    if configuration_status_value == "decommissioning" or configuration_status_value == "planned" or configuration_status_value == "unknown":
         # Removing all the configuration
         cli("send log 7 ### ZTP SCRIPT - REMOVING START-UP CONFIGURATION")   
         erase_startup_config()
 
-    ### ZTP eem script cleaner ###
-    # cli("send log 7 ### ZTP SCRIPT - REMOVING ZTP EEM SCRIPTS")   
-    # ztp_script_main_cleaner()
+    ### software upgrade section ###
+    # Don't run software upgrade if device needs decom #
+    if configuration_status_value != "decommissioning":
+        ### Run firmware upgrade ###
+        cli("send log 7 ### ZTP SCRIPT - SOFTWARE UPGRADE TASK")      
+        firmware_upgrade_status = firmware_upgrade_selector(model)
+
+    ### Configuration activation ###
+    # Status active
+    # Don't save configuration if device needs decom, or firmware upgrade is runing
+    if configuration_status_value == "active" and not firmware_upgrade_status:  
+        # activating configuration
+        cli(f"send log 7 ### ZTP SCRIPT - ACTIVATING {config_file} ###")            
+        # if device type is switch, copy the config file with running
+        if device_type == "switch": 
+            # Merge configuration file to startup
+            configure_merge_file_to_startup_config(config_file)            
+            # Merge configuration file to running
+            configure_merge_file_to_running_config(config_file)
+        # if device type is wlc, replace the config file with running            
+        if device_type == "wlc":
+            # For 9800, remove pnp/ztp interface configuration before applying configuration
+            if '9800' in model:
+                # Default uplink interface for C9800
+                configure_default_interfaces_c9800()
+                # Merge configuration file to startup
+                configure_merge_file_to_startup_config(config_file)                
+                # Merge configuration file to running
+                configure_merge_file_to_running_config(config_file)
+
+        # Always configure SSH keys
+        configure_ssh_keys()
+
+    # Status planned
+    # Don't save configuration if device needs decom, or firmware upgrade is runing
+    if configuration_status_value == "planned" and not firmware_upgrade_status:  
+        # Saving configuration
+        cli(f"send log 7 ### ZTP SCRIPT - SAVING {config_file} TO STARTUP-CONFIG ###")            
+        # if device type is switch, copy the config file with running
+        if device_type == "switch": 
+            erase_startup_config()
+            # Merge configuration file to startup
+            configure_merge_file_to_startup_config(config_file)
+        # if device type is wlc, replace the config file with running            
+        if device_type == "wlc":
+            # For 9800, remove pnp/ztp interface configuration before applying configuration
+            if '9800' in model:
+                erase_startup_config()
+                # Merge configuration file to startup
+                configure_merge_file_to_startup_config(config_file)
+      
+
+    ### LED Notification when ZTP script is done for status planned and unkown ###
+    if (configuration_status_value == "planned" or configuration_status_value == "unknown") and not firmware_upgrade_status:
+        activate_beacon_led(model)   
+
+    ### Send e-mail with ZTP script results  ###
+    if mail_status == True:
+        print ('###### Sending e-mail with ZTP results ######\n')
+        log_info('###### Sending e-mail ZTP results ######\n')
+        cli("send log 7 ###### Sending e-mail ZTP results ######")                   
+        send_email_status(serial, model, configuration_status_value, firmware_upgrade_status)    
+        
 
     ### End of ZTP script ###
     print ('######  END OF ZTP SCRIPT ######\n')
     log_info('######  END OF ZTP SCRIPT ######\n')
-    cli("send log 7 ### ZTP SCRIPT - ENDED")   
+    cli("send log 7 ###### ZTP SCRIPT - ENDED ######")   
+
+    ### Exit guest shell ###
     exit_guest_shell()
 
 if __name__ == "__main__":
     main()
-

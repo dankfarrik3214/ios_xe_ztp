@@ -11,16 +11,23 @@ This script can be used with the ZTP process of Cisco IOS-XE.
 - **Stack Firmware Sync**: Stack firmware sync if version mismatch is present.
 - **Stack Renumbering**: Based on configuration, it's possible to renumber switches in a stack.
 - **Stack Priority**: Based on configuration, it's possible to correct stack priority per switch.
-- **Currently only via HTTP**: HTTPS will be introduced later.
+- **Notify state with LED beacon**: Based on configuration, it's possible to automatically turn on a LED on a device
+- **Notify state with e-mail**: Based on configuration, it's possible to automatically mail device state
+
+## Development roadmap
+- **HTTPS support**: To transfer and interact with a ZTP server more secure
+- **Webhook support**: Sending webhooks with ZTP status information to a endpoint
+- **More device support**: Building support for other series (Cisco IOS-XE router series)
+
 
 ## Supported Devices
 
 | Device Type         | Minimum Firmware on IOS-XE |
 |---------------------|----------------------------|
-| Catalyst 9300       | 17.03.06                   |
 | Catalyst 9200       | 17.03.06                   |
-| Catalyst 9200CX     | 17.10.01                   |
-| Catalyst 9800       | 17.09.04                   |
+| Catalyst 9200CX     | 17.03.06                   |
+| Catalyst 9300       | 17.03.06                   |
+| Catalyst 9800       | 17.03.06                   |
 
 Currently only supporting IPv4.
 
@@ -110,7 +117,7 @@ It's also possible to boot a Cisco IOS-XE device without propagating the startup
 
 This ZTP script can read configuration files with instructions. These instructions are:
 
-- **Configuration Status**: Active, prep, and decom.
+- **Configuration Status**: Active, Planned, and Decommissioning.
 - **Configuration Stack Member**: Specify which switch is which stack role.
 - **Configuration Stack Priority**: Specify which switch has which stack priority.
 
